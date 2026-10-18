@@ -1,4 +1,4 @@
-opencv-python>=4.8
+opencv-python-headless>=4.8
 numpy>=1.24
 pymupdf>=1.23
 openpyxl>=3.1
