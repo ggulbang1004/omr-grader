@@ -28,6 +28,17 @@ def sess_path(name):
     return p
 
 
+def rotate_img(img, rot):
+    """rot: 0, 90 (시계), -90 (반시계), 180."""
+    if rot == 90:
+        return cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+    if rot == -90:
+        return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if rot == 180:
+        return cv2.rotate(img, cv2.ROTATE_180)
+    return img
+
+
 def list_sessions():
     return sorted([d for d in os.listdir(SESS_DIR)
                    if os.path.isdir(os.path.join(SESS_DIR, d))])
@@ -253,6 +264,14 @@ elif step.startswith("2."):
             img = pages[0]
         else:
             img = load_image(ref)
+        # 기준 이미지 회전 (스캔이 90도 돌아서 나온 경우)
+        rot_opts2 = {"회전 없음": 0, "90° 시계방향": 90,
+                     "90° 반시계방향": -90, "180°": 180}
+        rot2 = st.selectbox("기준 이미지 방향", list(rot_opts2.keys()),
+                            help="가로 답안지가 돌아가서 스캔됐다면 여기서 바로잡으세요.")
+        img = rotate_img(img, rot_opts2[rot2])
+        prev2 = cv2.resize(img, (400, int(400 * img.shape[0] / img.shape[1])))
+        st.image(cv2.cvtColor(prev2, cv2.COLOR_BGR2RGB), caption="기준 이미지 미리보기")
         img2, angle, rect = pdfio.prepare_page(img)
         ph, pw = img2.shape[:2]
         page_size = (pw, ph)
@@ -359,16 +378,6 @@ elif step.startswith("4."):
     if not os.path.exists(roster_x):
         st.warning("3단계에서 명렬표를 먼저 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
     st.info("교시별로 스캔 PDF를 올리세요. 한 번에 여러 교시 올려도 됩니다.")
-
-    def rotate_img(img, rot):
-        """rot: 0, 90 (시계), -90 (반시계), 180."""
-        if rot == 90:
-            return cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-        if rot == -90:
-            return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        if rot == 180:
-            return cv2.rotate(img, cv2.ROTATE_180)
-        return img
 
     def get_rotation(sp, period, tpl):
         """저장된 회전값, 없으면 자동 판단 (가로/세로 비율 비교)."""
