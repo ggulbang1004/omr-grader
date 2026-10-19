@@ -33,6 +33,27 @@ def list_sessions():
                    if os.path.isdir(os.path.join(SESS_DIR, d))])
 
 
+def load_roster_full(sp):
+    """세션 명렬표 로드 + 수험번호 구조 설정 적용 (반/번호 → 수험번호 합성)."""
+    import json
+    cfg = {"school_code": "21911", "class_digits": 2, "num_digits": 2}
+    cp = os.path.join(sp, "exam_struct.json")
+    if os.path.exists(cp):
+        with open(cp, encoding="utf-8") as f:
+            cfg.update(json.load(f))
+    roster = RO.load_roster(os.path.join(sp, "roster.xlsx"))
+    RO.synthesize_exam_nos(roster, cfg["school_code"],
+                           int(cfg["class_digits"]), int(cfg["num_digits"]))
+    return roster, cfg
+
+
+def save_exam_struct(sp, school_code, class_digits, num_digits):
+    import json
+    with open(os.path.join(sp, "exam_struct.json"), "w", encoding="utf-8") as f:
+        json.dump({"school_code": school_code, "class_digits": int(class_digits),
+                   "num_digits": int(num_digits)}, f, ensure_ascii=False)
+
+
 def export_session(name):
     """세션 폴더를 zip 바이트로 내보내기."""
     import zipfile
@@ -280,13 +301,35 @@ elif step.startswith("3."):
         st.stop()
     sp = sess_path(st.session_state.session)
     st.info("판독 전에 명렬표를 먼저 올려두세요. 판독 직후 오류를 바로 대조합니다.")
+    # 수험번호 구조 설정 (학교번호+반+번호)
+    import json
+    cfg_path = os.path.join(sp, "exam_struct.json")
+    cfg0 = {"school_code": "21911", "class_digits": 2, "num_digits": 2}
+    if os.path.exists(cfg_path):
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg0.update(json.load(f))
+    with st.expander("수험번호 구조 설정", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            school_code = st.text_input("학교번호", value=cfg0["school_code"])
+        with c2:
+            class_digits = st.number_input("반 자리수", min_value=1, max_value=3,
+                                           value=int(cfg0["class_digits"]))
+        with c3:
+            num_digits = st.number_input("번호 자리수", min_value=1, max_value=3,
+                                         value=int(cfg0["num_digits"]))
+        st.caption(f"예: {school_code} + 반({class_digits}자리) + 번호({num_digits}자리)"
+                   f" → {len(school_code) + class_digits + num_digits}자리 수험번호")
+        if st.button("구조 저장"):
+            save_exam_struct(sp, school_code, class_digits, num_digits)
+            st.success("저장됨")
     up = st.file_uploader("명렬표 엑셀", type=["xlsx"])
     if up:
         tp = os.path.join(sp, "roster.xlsx")
         with open(tp, "wb") as f:
             f.write(up.read())
         try:
-            roster = RO.load_roster(tp)
+            roster, cfg = load_roster_full(sp)
             st.success(f"{len(roster)}명 로드됨")
             st.dataframe([{"수험번호": r["exam_no"], "성명": r["name"],
                            "학년": r["grade"], "반": r["class_no"],
@@ -336,7 +379,7 @@ elif step.startswith("4."):
             st.warning("명렬표를 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
             return
         try:
-            roster = RO.load_roster(roster_x)
+            roster, _cfg = load_roster_full(sp)
             infos = [dict(exam_no=s["exam_no"], name="?") for s in results]
             verdicts, unsubmitted = RO.check_sheets(infos, roster)
             rows = []
@@ -344,7 +387,7 @@ elif step.startswith("4."):
                 errs = [m for _, m in v["errors"]]
                 errs += s.get("exam_no_errors", [])
                 rows.append({"수험번호": v["exam_no_attrib"] or s["exam_no"],
-                             "판정": v["verdict"],
+                             "판정": v["status"],
                              "오류": "; ".join(errs)})
             st.subheader(f"{period} 명렬표 대조 결과")
             st.dataframe(rows)
@@ -466,7 +509,7 @@ elif step.startswith("6."):
         with open(os.path.join(sp, f"read_{period}.pkl"), "rb") as f:
             sheets = pickle.load(f)
         key, points = KEY.load_key(os.path.join(sp, f"key_{period}.xlsx"))
-        roster = RO.load_roster(roster_x)
+        roster, _cfg = load_roster_full(sp)
         infos = [dict(exam_no=s["exam_no"], name="?") for s in sheets]
         verdicts, unsubmitted = RO.check_sheets(infos, roster)
         by_no = {r["exam_no"]: r for r in roster}
@@ -515,7 +558,7 @@ elif step.startswith("6."):
                 prog.progress((i + 1) / len(periods))
             st.session_state.batch_results = all_results
             # 종합표: 학생 x 교시 점수
-            roster = RO.load_roster(roster_x)
+            roster, _cfg = load_roster_full(sp)
             from openpyxl import Workbook
             wb = Workbook()
             ws = wb.active

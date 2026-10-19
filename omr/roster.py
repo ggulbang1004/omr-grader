@@ -51,9 +51,47 @@ def _map_columns(header_row):
     return cols
 
 
+def _detect_wide_format(rows):
+    """반별 wide 양식 감지: '1반','2반'... 헤더가 있는 행과 열 위치 반환."""
+    pat = re.compile(r"^(\d+)\s*반$")
+    for i, r in enumerate(rows[:5]):
+        found = []
+        for idx, v in enumerate(r):
+            m = pat.match(str(v or "").strip())
+            if m:
+                found.append((idx, int(m.group(1))))
+        if found:
+            return i, found
+    return None, []
+
+
+def _load_roster_wide(ws, header_idx, class_cols, rows):
+    """wide 양식 파싱: 반 헤더 열=번호, 다음 열=이름."""
+    roster = []
+    for cidx, class_no in class_cols:
+        ncol, nmcol = cidx, cidx + 1
+        for r in rows[header_idx + 1:]:
+            if ncol >= len(r):
+                continue
+            num_v = r[ncol] if ncol < len(r) else None
+            name_v = r[nmcol] if nmcol < len(r) else None
+            if num_v is None or name_v is None:
+                continue
+            num_s = str(num_v).strip()
+            name_s = str(name_v).strip()
+            if not num_s or not name_s:
+                continue
+            if not re.fullmatch(r"\d+", num_s):
+                continue  # '인원' 합계 행 등 제외
+            roster.append(dict(exam_no="", name=name_s, grade="",
+                               class_no=str(class_no), num=num_s))
+    return roster
+
+
 def load_roster(xlsx_path, sheet=None):
     """Read a roster xlsx into a list of dicts. Column-tolerant: any common
-    header wording for 수험번호/성명/학년/반/번호 is accepted."""
+    header wording for 수험번호/성명/학년/반/번호 is accepted.
+    반별 wide 양식(1반/2반... 헤더 + 번호/이름 쌍)도 자동 인식."""
     wb = load_workbook(xlsx_path, data_only=True)
     ws = wb[sheet] if sheet else wb.active
     rows = list(ws.iter_rows(values_only=True))
@@ -63,23 +101,44 @@ def load_roster(xlsx_path, sheet=None):
         if "exam_no" in c and "name" in c:
             header_idx, cols = i, c
             break
-    if header_idx is None:
-        raise ValueError("명렬표에서 수험번호/성명 컬럼을 찾지 못했습니다.")
-    roster = []
-    for r in rows[header_idx + 1:]:
-        if all(v is None for v in r):
+    if header_idx is not None:
+        roster = []
+        for r in rows[header_idx + 1:]:
+            if all(v is None for v in r):
+                continue
+            exam_no = str(r[cols["exam_no"]]).strip() if r[cols["exam_no"]] is not None else ""
+            name = str(r[cols["name"]]).strip() if r[cols["name"]] is not None else ""
+            if not exam_no:
+                continue
+            roster.append(dict(
+                exam_no=re.sub(r"\D", "", exam_no),
+                name=name,
+                grade=str(r[cols["grade"]]).strip() if "grade" in cols and r[cols["grade"]] else "",
+                class_no=str(r[cols["class_no"]]).strip() if "class_no" in cols and r[cols["class_no"]] else "",
+                num=str(r[cols["num"]]).strip() if "num" in cols and r[cols["num"]] else "",
+            ))
+        return roster
+    # wide 양식 시도
+    widx, class_cols = _detect_wide_format(rows)
+    if class_cols:
+        roster = _load_roster_wide(ws, widx, class_cols, rows)
+        if roster:
+            return roster
+    raise ValueError("명렬표에서 수험번호/성명 컬럼을 찾지 못했습니다.")
+
+
+def synthesize_exam_nos(roster, school_code, class_digits=2, num_digits=2):
+    """반/번호만 있는 명렬표에 수험번호 합성: 학교번호+반+번호."""
+    sc = re.sub(r"\D", "", str(school_code or ""))
+    for r in roster:
+        if r.get("exam_no"):
             continue
-        exam_no = str(r[cols["exam_no"]]).strip() if r[cols["exam_no"]] is not None else ""
-        name = str(r[cols["name"]]).strip() if r[cols["name"]] is not None else ""
-        if not exam_no:
+        try:
+            cn = int(re.sub(r"\D", "", str(r.get("class_no", ""))))
+            nm = int(re.sub(r"\D", "", str(r.get("num", ""))))
+        except ValueError:
             continue
-        roster.append(dict(
-            exam_no=re.sub(r"\D", "", exam_no),
-            name=name,
-            grade=str(r[cols["grade"]]).strip() if "grade" in cols and r[cols["grade"]] else "",
-            class_no=str(r[cols["class_no"]]).strip() if "class_no" in cols and r[cols["class_no"]] else "",
-            num=str(r[cols["num"]]).strip() if "num" in cols and r[cols["num"]] else "",
-        ))
+        r["exam_no"] = f"{sc}{cn:0{class_digits}d}{nm:0{num_digits}d}"
     return roster
 
 
