@@ -33,6 +33,49 @@ def list_sessions():
                    if os.path.isdir(os.path.join(SESS_DIR, d))])
 
 
+def export_session(name):
+    """세션 폴더를 zip 바이트로 내보내기."""
+    import zipfile
+    import tempfile
+    sp = os.path.join(SESS_DIR, name)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("_session_name.txt", name)
+        for root, dirs, files in os.walk(sp):
+            for f in files:
+                fp = os.path.join(root, f)
+                arc = os.path.relpath(fp, sp)
+                z.write(fp, arc)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def import_session(uploaded):
+    """업로드된 zip을 세션으로 가져오기. 세션명을 반환."""
+    import zipfile
+    import re
+    z = zipfile.ZipFile(io.BytesIO(uploaded.read()))
+    names = z.namelist()
+    # zip 안에 저장된 세션명 우선 사용
+    if "_session_name.txt" in names:
+        base = z.read("_session_name.txt").decode("utf-8").strip()
+    else:
+        base = names[0].split("/")[0] if names else "imported"
+    base = re.sub(r'[\\/:*?"<>|]', "_", base).strip() or "imported"
+    name = base
+    i = 2
+    while os.path.exists(os.path.join(SESS_DIR, name)):
+        name = f"{base}_{i}"
+        i += 1
+    sp = os.path.join(SESS_DIR, name)
+    os.makedirs(sp, exist_ok=True)
+    for n in names:
+        if n == "_session_name.txt":
+            continue
+        z.extract(sp, n)
+    return name
+
+
 def img_to_bytes(img):
     ok, buf = cv2.imencode(".png", img)
     return buf.tobytes()
@@ -104,6 +147,22 @@ if step.startswith("📖"):
 
 엑셀 리포트: 개인별점수 / 문항분석 / 오류리스트 / 정답및배점 / 명렬표대조
 
+## 2일에 나눠서 작업하기
+
+**첫째 날 (스캔·판독·오류 수정)**
+1. 1~4단계 진행 (세션 → 캘리브레이션 → PDF 판독 → 명렬표 대조)
+2. 오류리스트에서 인적사항 마킹 오류 확인·수정
+3. 오류 난 답안지는 다시 스캔해서 판독
+4. 1단계에서 **세션 저장** 버튼으로 파일 다운로드
+
+**둘째 날 (채점)**
+1. 1단계에서 저장된 세션 파일 불러오기
+2. 5단계에서 정답·배점 엑셀 업로드
+3. 6단계에서 가채점 실행 → 엑셀 다운로드
+
+> 웹 버전은 서버가 쉬면 저장 내용이 지워질 수 있으니,
+> 첫째 날 작업이 끝나면 반드시 세션 저장 파일을 받아두세요.
+
 ## 자주 묻는 질문
 
 **Q. 답안이 잘못 읽혔어요.**
@@ -132,6 +191,23 @@ if step.startswith("1."):
         sp = sess_path(sel)
         st.write("저장된 템플릿:", [f for f in os.listdir(sp)
                                     if f.startswith("template_")])
+        st.divider()
+        st.subheader("중간 저장 / 불러오기")
+        st.caption("첫째 날 판독까지 끝낸 뒤 저장해두면, 둘째 날 이어서 작업할 수 있습니다.")
+        c1, c2 = st.columns(2)
+        with c1:
+            data = export_session(sel)
+            st.download_button("💾 세션 저장 (파일 다운로드)",
+                               data, file_name=f"세션_{sel}.zip",
+                               mime="application/zip")
+        with c2:
+            up = st.file_uploader("저장된 세션 파일 불러오기", type=["zip"],
+                                  key="sess_import")
+            if up:
+                name = import_session(up)
+                st.session_state.session = name
+                st.success(f"세션 '{name}' 불러옴")
+                st.rerun()
 
 # ---------- step 2: calibration ----------
 elif step.startswith("2."):
