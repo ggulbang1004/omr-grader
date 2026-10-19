@@ -155,8 +155,10 @@ if step.startswith("📖"):
 ## 4단계: 스캔 PDF 판독
 
 1. 교시별로 스캔 PDF를 올리세요 (한 번에 여러 교시 가능)
-2. 판독 시작을 누르면 각 답안지의 마킹을 읽고, 곧바로 명렬표와 대조합니다
-3. 수험번호 오류·미기재·미제출이 바로 표시되니 확인 후 오류 답안지는 다시 스캔하세요
+2. **스캔 방향** 확인: 가로 답안지가 90도 돌아가서 스캔됐다면 90°를 선택하세요.
+   미리보기에서 똑바로 보이는지 확인할 수 있습니다. (자동이 기본값)
+3. 판독 시작을 누르면 각 답안지의 마킹을 읽고, 곧바로 명렬표와 대조합니다
+4. 수험번호 오류·미기재·미제출이 바로 표시되니 확인 후 오류 답안지는 다시 스캔하세요
 
 ## 5단계: 정답·배점 업로드
 
@@ -358,6 +360,35 @@ elif step.startswith("4."):
         st.warning("3단계에서 명렬표를 먼저 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
     st.info("교시별로 스캔 PDF를 올리세요. 한 번에 여러 교시 올려도 됩니다.")
 
+    def rotate_img(img, rot):
+        """rot: 0, 90 (시계), -90 (반시계), 180."""
+        if rot == 90:
+            return cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+        if rot == -90:
+            return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        if rot == 180:
+            return cv2.rotate(img, cv2.ROTATE_180)
+        return img
+
+    def get_rotation(sp, period, tpl):
+        """저장된 회전값, 없으면 자동 판단 (가로/세로 비율 비교)."""
+        import json
+        rp = os.path.join(sp, f"rot_{period}.json")
+        if os.path.exists(rp):
+            with open(rp, encoding="utf-8") as f:
+                return json.load(f).get("rot", 0)
+        return "auto"
+
+    def resolve_rotation(rot_setting, img, tpl):
+        if rot_setting != "auto":
+            return rot_setting
+        tw, th = tpl.page_size
+        h, w = img.shape[:2]
+        # 템플릿과 가로/세로가 뒤바뀌었으면 90도 회전
+        if (tw > th) != (w > h):
+            return 90
+        return 0
+
     def load_results(period):
         import pickle
         rp = os.path.join(sp, f"read_{period}.pkl")
@@ -438,10 +469,41 @@ elif step.startswith("4."):
 
     for period in periods:
         with st.expander(f"{period} PDF", expanded=False):
+            tpl = Template.load(os.path.join(sp, f"template_{period}.json"))
+            # 회전 설정
+            rot_opts = {"자동": "auto", "회전 없음": 0, "90° 시계방향": 90,
+                        "90° 반시계방향": -90, "180°": 180}
+            cur_rot = get_rotation(sp, period, tpl)
+            cur_label = next((k for k, v in rot_opts.items() if v == cur_rot), "자동")
+            rot_label = st.selectbox("스캔 방향", list(rot_opts.keys()),
+                                     index=list(rot_opts.keys()).index(cur_label),
+                                     key=f"rot_{period}",
+                                     help="가로 답안지가 90도 돌아가서 스캔됐다면 90°를 선택하세요.")
+            import json
+            with open(os.path.join(sp, f"rot_{period}.json"), "w",
+                      encoding="utf-8") as f:
+                json.dump({"rot": rot_opts[rot_label]}, f)
             pdfs = st.file_uploader(f"{period} 스캔 PDF", type=["pdf"],
                                     accept_multiple_files=True, key=f"pdf_{period}")
+            # 미리보기: 첫 페이지 회전 적용 확인
+            if pdfs:
+                try:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".pdf",
+                                                     delete=False) as tf:
+                        tf.write(pdfs[0].read())
+                        tfp = tf.name
+                    pdfs[0].seek(0)
+                    p0 = pdfio.render_pages(tfp, dpi=80)[0]
+                    os.unlink(tfp)
+                    rr = resolve_rotation(rot_opts[rot_label], p0, tpl)
+                    prev = rotate_img(p0, rr)
+                    prev_small = cv2.resize(prev, (300, int(300 * prev.shape[0] / prev.shape[1])))
+                    st.image(cv2.cvtColor(prev_small, cv2.COLOR_BGR2RGB),
+                             caption="첫 페이지 미리보기 (회전 적용됨)")
+                except Exception:
+                    pass
             if pdfs and st.button(f"{period} 판독 시작", key=f"read_{period}"):
-                tpl = Template.load(os.path.join(sp, f"template_{period}.json"))
                 tmp_paths = []
                 for p in pdfs:
                     tp = os.path.join(sp, f"upload_{period}_{p.name}")
@@ -451,8 +513,10 @@ elif step.startswith("4."):
                 prog = st.progress(0)
                 total_pages = sum(len(pdfio.render_pages(tp, dpi=120)) for tp in tmp_paths)
                 done, results = 0, []
+                rot_val = rot_opts[rot_label]
                 for tp in tmp_paths:
                     for img, rect, angle in PL.read_pdf_pages(tp, dpi=200):
+                        img = rotate_img(img, resolve_rotation(rot_val, img, tpl))
                         s = PL.read_sheet(img, tpl)
                         s["src"] = os.path.basename(tp)
                         results.append(s)
