@@ -303,14 +303,18 @@ elif step.startswith("2."):
                                   cv2.COLOR_BGR2RGB),
                      caption="발견된 블록 (파랑). 각 번호가 무엇인지 아래에서 지정하세요.")
 
-            def rect_to_grid(r, n_cols, n_rows):
+            def rect_to_grid(r, n_cols, n_rows, kind):
                 x0, y0, ww, hh = r
                 pw2, ph2 = page_size
-                mg = 0.08
-                fx0 = (x0 + ww * mg) / pw2
-                fx1 = (x0 + ww * (1 - mg)) / pw2
-                fy0 = (y0 + hh * mg) / ph2
-                fy1 = (y0 + hh * (1 - mg)) / ph2
+                if kind == "answer":
+                    # 답안: 오른쪽 30%는 문번 열이므로 제외
+                    fx0 = (x0 + ww * 0.03) / pw2
+                    fx1 = (x0 + ww * 0.70) / pw2
+                else:
+                    fx0 = (x0 + ww * 0.05) / pw2
+                    fx1 = (x0 + ww * 0.95) / pw2
+                fy0 = (y0 + hh * 0.03) / ph2
+                fy1 = (y0 + hh * 0.97) / ph2
                 xs = [fx0 + (fx1 - fx0) * i / max(1, n_cols - 1) for i in range(n_cols)]
                 ys = [fy0 + (fy1 - fy0) * i / max(1, n_rows - 1) for i in range(n_rows)]
                 return xs, ys
@@ -337,7 +341,7 @@ elif step.startswith("2."):
                         n1, n2 = st.columns(2)
                         n_cols = n1.number_input("열 수", 2, 15, 9, key=f"bnc{i}")
                         n_rows = n2.number_input("행 수", 1, 15, 10, key=f"bnr{i}")
-                    xs, ys = rect_to_grid(r, n_cols, n_rows)
+                    xs, ys = rect_to_grid(r, n_cols, n_rows, kind)
                     opt = {"q_start": q_start} if kind == "답안" else {}
                     k = "answer" if kind == "답안" else "examno"
                     keep_zones.append(Zone(k, name, xs, ys, **opt))
