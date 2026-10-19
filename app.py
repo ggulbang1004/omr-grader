@@ -279,83 +279,74 @@ elif step.startswith("2."):
         bubble_d = 26
         cv2.imwrite(os.path.join(sp, f"ref_{period}.png"), img2)
 
-        # ---------- 드래그 영역 정의 ----------
-        st.subheader("영역 정의 (이미지 위에 드래그로 박스를 그리세요)")
-        try:
-            from streamlit_drawable_canvas import st_canvas
-            from PIL import Image as PILImage
-            canvas_available = True
-        except ImportError:
-            canvas_available = False
+        # ---------- 블록 자동 찾기 + 라벨링 ----------
+        st.subheader("블록 찾기 (자동)")
+        st.caption("버블이 옅어도 블록 테두리는 찾을 수 있습니다. 찾은 박스에 번호를 매기세요.")
+        if st.button("블록 자동 찾기"):
+            from omr.template import find_block_rects
+            rects = find_block_rects(img2)
+            # 너무 작은 박스(헤더 등) 제외
+            ph2, pw2 = img2.shape[:2]
+            rects = [r for r in rects if r[2] * r[3] > pw2 * ph2 * 0.015]
+            st.session_state.block_rects = rects
+            st.success(f"{len(rects)}개 블록 발견")
 
-        if not canvas_available:
-            st.warning("그리기 모듈을 불러오는 중입니다. 잠시 후 새로고침 해주세요.")
-        else:
-            pil_img = PILImage.fromarray(cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))
-            cw = 900
-            ch = int(pil_img.height * cw / pil_img.width)
-            pil_small = pil_img.resize((cw, ch))
-            st.caption("사각형 모드에서 답안 블록과 수험번호 블록을 드래그로 그려주세요.")
-            canvas_result = st_canvas(
-                fill_color="rgba(0, 255, 0, 0.15)",
-                stroke_width=2,
-                stroke_color="#00ff00",
-                background_image=pil_small,
-                drawing_mode="rect",
-                key=f"canvas_{period}",
-                height=ch,
-                width=cw,
-            )
-            rects = []
-            if canvas_result.json_data and canvas_result.json_data.get("objects"):
-                for o in canvas_result.json_data["objects"]:
-                    if o.get("type") == "rect":
-                        x0 = o["left"] / cw
-                        y0 = o["top"] / ch
-                        x1 = (o["left"] + o["width"]) / cw
-                        y1 = (o["top"] + o["height"]) / ch
-                        rects.append((x0, y0, x1, y1))
-            st.info(f"그려진 박스: {len(rects)}개")
+        rects = st.session_state.get("block_rects", [])
+        if rects:
+            # 번호 오버레이
+            vis = img2.copy()
+            for i, (x, y, ww, hh) in enumerate(rects):
+                cv2.rectangle(vis, (x, y), (x + ww, y + hh), (255, 0, 0), 3)
+                cv2.putText(vis, str(i + 1), (x + 10, y + 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 3)
+            st.image(cv2.cvtColor(cv2.resize(vis, (900, int(900 * vis.shape[0] / vis.shape[1]))),
+                                  cv2.COLOR_BGR2RGB),
+                     caption="발견된 블록 (파랑). 각 번호가 무엇인지 아래에서 지정하세요.")
 
             def rect_to_grid(r, n_cols, n_rows):
-                x0, y0, x1, y1 = r
-                mg = 0.06
-                fx0 = x0 + (x1 - x0) * mg
-                fx1 = x1 - (x1 - x0) * mg
-                fy0 = y0 + (y1 - y0) * mg
-                fy1 = y1 - (y1 - y0) * mg
+                x0, y0, ww, hh = r
+                pw2, ph2 = page_size
+                mg = 0.08
+                fx0 = (x0 + ww * mg) / pw2
+                fx1 = (x0 + ww * (1 - mg)) / pw2
+                fy0 = (y0 + hh * mg) / ph2
+                fy1 = (y0 + hh * (1 - mg)) / ph2
                 xs = [fx0 + (fx1 - fx0) * i / max(1, n_cols - 1) for i in range(n_cols)]
                 ys = [fy0 + (fy1 - fy0) * i / max(1, n_rows - 1) for i in range(n_rows)]
                 return xs, ys
 
             keep_zones = []
             for i, r in enumerate(rects):
-                with st.expander(f"박스 {i+1}", expanded=True):
+                with st.expander(f"박스 {i+1}", expanded=False):
                     c1, c2, c3 = st.columns(3)
-                    kind = c1.selectbox("종류", ["answer", "examno"],
-                                        key=f"ckind{i}")
+                    kind = c1.selectbox("종류", ["무시", "답안", "수험번호"],
+                                        key=f"bkind{i}")
+                    if kind == "무시":
+                        continue
                     name = c2.text_input("이름",
-                                         f"답안{i+1}" if kind == "answer" else "수험번호",
-                                         key=f"cname{i}")
+                                         f"답안{i+1}" if kind == "답안" else "수험번호",
+                                         key=f"bname{i}")
                     q_start = 1
-                    if kind == "answer":
-                        q_start = c3.number_input("시작 문항", 1, 200, 1, key=f"cqs{i}")
-                    n1, n2 = st.columns(2)
-                    if kind == "answer":
-                        n_cols = n1.number_input("열 수 (선택지)", 2, 10, 5, key=f"cnc{i}")
-                        n_rows = n2.number_input("행 수 (문항 수)", 1, 100, 20, key=f"cnr{i}")
+                    n_cols, n_rows = 5, 20
+                    if kind == "답안":
+                        q_start = c3.number_input("시작 문항", 1, 200, 1, key=f"bqs{i}")
+                        n1, n2 = st.columns(2)
+                        n_cols = n1.number_input("열 수 (선택지)", 2, 10, 5, key=f"bnc{i}")
+                        n_rows = n2.number_input("행 수 (문항 수)", 1, 100, 20, key=f"bnr{i}")
                     else:
-                        n_cols = n1.number_input("열 수", 2, 15, 9, key=f"cnc{i}")
-                        n_rows = n2.number_input("행 수", 1, 15, 10, key=f"cnr{i}")
+                        n1, n2 = st.columns(2)
+                        n_cols = n1.number_input("열 수", 2, 15, 9, key=f"bnc{i}")
+                        n_rows = n2.number_input("행 수", 1, 15, 10, key=f"bnr{i}")
                     xs, ys = rect_to_grid(r, n_cols, n_rows)
-                    opt = {"q_start": q_start} if kind == "answer" else {}
-                    keep_zones.append(Zone(kind, name, xs, ys, **opt))
+                    opt = {"q_start": q_start} if kind == "답안" else {}
+                    k = "answer" if kind == "답안" else "examno"
+                    keep_zones.append(Zone(k, name, xs, ys, **opt))
 
             if keep_zones:
                 ov = draw_overlay(img2, page_size, keep_zones, bubble_d=bubble_d)
                 st.image(cv2.cvtColor(cv2.resize(ov, (900, int(900 * ov.shape[0] / ov.shape[1]))),
                                       cv2.COLOR_BGR2RGB),
-                         caption="영역 오버레이 — 점이 버블 한가운데 오도록 박스를 조정하세요")
+                         caption="영역 오버레이 — 점이 버블 한가운데 오는지 확인하세요")
                 if st.button("템플릿 저장"):
                     tpl = Template(period=period, zones=keep_zones, page_size=page_size,
                                    bubble_d=bubble_d)
@@ -369,6 +360,7 @@ elif step.startswith("2."):
                     gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
                     tpl.save_anchor(tp, gray)
                     st.success(f"템플릿 저장됨: template_{period}.json")
+                    st.session_state.block_rects = []
 
 # ---------- step 3: roster ----------
 elif step.startswith("3."):

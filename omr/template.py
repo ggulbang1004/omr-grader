@@ -262,3 +262,42 @@ def draw_overlay(img, page_size, zones, points=None, bubble_d=28):
         for x, y in points:
             cv2.circle(vis, (int(x), int(y)), 3, (0, 0, 255), -1)
     return vis
+
+
+def find_block_rects(img):
+    """엣지 기반 블록 테두리 검출. [(x, y, w, h)] 리스트 (픽셀)."""
+    import cv2
+    import numpy as np
+    h, w = img.shape[:2]
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    rects = []
+    for c in contours:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4:
+            x, y, ww, hh = cv2.boundingRect(approx)
+            area = ww * hh
+            if w * h * 0.01 < area < w * h * 0.4 and ww > 60 and hh > 60:
+                rects.append((int(x), int(y), int(ww), int(hh)))
+    # 중복 제거 (큰 것 우선)
+    rects = sorted(rects, key=lambda r: r[2] * r[3], reverse=True)
+    kept = []
+    for r in rects:
+        x, y, ww, hh = r
+        dup = False
+        for kx, ky, kww, khh in kept:
+            ix0, iy0 = max(x, kx), max(y, ky)
+            ix1, iy1 = min(x + ww, kx + kww), min(y + hh, ky + khh)
+            if ix1 > ix0 and iy1 > iy0:
+                ia = (ix1 - ix0) * (iy1 - iy0)
+                if ia / (ww * hh) > 0.5 or ia / (kww * khh) > 0.5:
+                    dup = True
+                    break
+        if not dup:
+            kept.append(r)
+    return sorted(kept, key=lambda r: (r[0], r[1]))
