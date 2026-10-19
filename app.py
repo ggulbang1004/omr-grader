@@ -125,8 +125,10 @@ if step.startswith("📖"):
 
 ## 3단계: 스캔 PDF 판독
 
-교시별로 스캔 PDF를 올리세요 (한 번에 여러 교시 가능).
-판독 시작을 누르면 각 답안지의 마킹을 읽습니다.
+1. **명렬표를 먼저 올려두세요** (3단계 화면 상단에서 바로 올릴 수 있음)
+2. 교시별로 스캔 PDF를 올리세요 (한 번에 여러 교시 가능)
+3. 판독 시작을 누르면 각 답안지의 마킹을 읽고, **곧바로 명렬표와 대조**합니다
+4. 수험번호 오류·미기재·미제출이 바로 표시되니 확인 후 오류 답안지는 다시 스캔하세요
 
 ## 4단계: 명렬표 업로드
 
@@ -150,10 +152,11 @@ if step.startswith("📖"):
 ## 2일에 나눠서 작업하기
 
 **첫째 날 (스캔·판독·오류 수정)**
-1. 1~4단계 진행 (세션 → 캘리브레이션 → PDF 판독 → 명렬표 대조)
-2. 오류리스트에서 인적사항 마킹 오류 확인·수정
-3. 오류 난 답안지는 다시 스캔해서 판독
-4. 1단계에서 **세션 저장** 버튼으로 파일 다운로드
+1. 1~2단계 진행 (세션 → 캘리브레이션)
+2. 3단계에서 명렬표를 먼저 올린 뒤 스캔 PDF 판독 → 오류가 바로 표시됨
+3. 오류리스트에서 인적사항 마킹 오류 확인·수정
+4. 오류 난 답안지는 다시 스캔해서 판독
+5. 1단계에서 **세션 저장** 버튼으로 파일 다운로드
 
 **둘째 날 (채점)**
 1. 1단계에서 저장된 세션 파일 불러오기
@@ -282,6 +285,21 @@ elif step.startswith("3."):
         st.warning("2단계에서 템플릿을 먼저 만드세요.")
         st.stop()
     periods = [t[9:-5] for t in tpls]
+    # 명렬표: 판독 직후 대조할 수 있도록 여기서도 업로드 가능
+    roster_x = os.path.join(sp, "roster.xlsx")
+    with st.expander("명렬표 (판독 후 오류 대조용 — 먼저 올려두세요)",
+                     expanded=not os.path.exists(roster_x)):
+        up_r = st.file_uploader("명렬표 엑셀", type=["xlsx"], key="roster_in_3")
+        if up_r:
+            with open(roster_x, "wb") as f:
+                f.write(up_r.read())
+            st.success("명렬표 저장됨")
+            st.rerun()
+        if os.path.exists(roster_x):
+            try:
+                st.caption(f"{len(RO.load_roster(roster_x))}명 로드됨")
+            except Exception as e:
+                st.error(str(e))
     st.info("교시별로 스캔 PDF를 올리세요. 한 번에 여러 교시 올려도 됩니다.")
     for period in periods:
         with st.expander(f"{period} PDF", expanded=False):
@@ -309,6 +327,28 @@ elif step.startswith("3."):
                 with open(os.path.join(sp, f"read_{period}.pkl"), "wb") as f:
                     pickle.dump(results, f)
                 st.success(f"{period}: {len(results)}장 판독 완료")
+                # 판독 직후 명렬표 대조
+                if os.path.exists(roster_x):
+                    try:
+                        roster = RO.load_roster(roster_x)
+                        infos = [dict(exam_no=s["exam_no"], name="?") for s in results]
+                        verdicts, unsubmitted = RO.check_sheets(infos, roster)
+                        rows = []
+                        for s, v in zip(results, verdicts):
+                            errs = [m for _, m in v["errors"]]
+                            errs += s.get("exam_no_errors", [])
+                            rows.append({"수험번호": v["exam_no_attrib"] or s["exam_no"],
+                                         "판정": v["verdict"],
+                                         "오류": "; ".join(errs)})
+                        st.subheader(f"{period} 명렬표 대조 결과")
+                        st.dataframe(rows)
+                        if unsubmitted:
+                            st.warning("미제출: " + ", ".join(
+                                f"{r['exam_no']}({r['name']})" for r in unsubmitted))
+                    except Exception as e:
+                        st.error(f"대조 중 오류: {e}")
+                else:
+                    st.warning("명렬표를 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
 
 # ---------- step 4: roster ----------
 elif step.startswith("4."):
