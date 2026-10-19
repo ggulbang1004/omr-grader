@@ -4,9 +4,15 @@ import numpy as np
 
 
 def render_pages(pdf_path, dpi=200):
-    """PDF의 모든 페이지를 BGR 이미지 리스트로 렌더링."""
+    """PDF의 모든 페이지를 BGR 이미지 리스트로 렌더링.
+    pdf_path: 파일 경로 또는 PDF bytes."""
     import fitz
-    doc = fitz.open(pdf_path)
+    if isinstance(pdf_path, (bytes, bytearray)):
+        doc = fitz.open(stream=bytes(pdf_path), filetype="pdf")
+    elif hasattr(pdf_path, "read"):
+        doc = fitz.open(stream=pdf_path.read(), filetype="pdf")
+    else:
+        doc = fitz.open(pdf_path)
     pages = []
     zoom = dpi / 72.0
     mat = fitz.Matrix(zoom, zoom)
