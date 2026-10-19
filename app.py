@@ -279,78 +279,96 @@ elif step.startswith("2."):
         bubble_d = 26
         cv2.imwrite(os.path.join(sp, f"ref_{period}.png"), img2)
 
-        # ---------- 수동 영역 정의 ----------
-        st.subheader("영역 정의 (슬라이더로 박스를 버블에 맞추세요)")
-        if "mzones" not in st.session_state:
-            st.session_state.mzones = []
-        bcol1, bcol2 = st.columns(2)
-        if bcol1.button("답안 영역 추가"):
-            n = len([z for z in st.session_state.mzones if z["kind"] == "answer"]) + 1
-            st.session_state.mzones.append(dict(
-                kind="answer", name=f"답안{n}", q_start=1,
-                x0=0.60, y0=0.05, x1=0.80, y1=0.95, n_cols=5, n_rows=20))
-        if bcol2.button("수험번호 영역 추가"):
-            st.session_state.mzones.append(dict(
-                kind="examno", name="수험번호",
-                x0=0.85, y0=0.30, x1=0.98, y1=0.95, n_cols=9, n_rows=10))
+        # ---------- 드래그 영역 정의 ----------
+        st.subheader("영역 정의 (이미지 위에 드래그로 박스를 그리세요)")
+        try:
+            from streamlit_drawable_canvas import st_canvas
+            from PIL import Image as PILImage
+            canvas_available = True
+        except ImportError:
+            canvas_available = False
 
-        def zone_to_grid(mz):
-            """박스 -> 균등 격자 (xs, ys 분수 좌표)."""
-            mg = 0.06  # 박스 안쪽 여백
-            fx0 = mz["x0"] + (mz["x1"] - mz["x0"]) * mg
-            fx1 = mz["x1"] - (mz["x1"] - mz["x0"]) * mg
-            fy0 = mz["y0"] + (mz["y1"] - mz["y0"]) * mg
-            fy1 = mz["y1"] - (mz["y1"] - mz["y0"]) * mg
-            nc, nr = mz["n_cols"], mz["n_rows"]
-            xs = [fx0 + (fx1 - fx0) * i / max(1, nc - 1) for i in range(nc)]
-            ys = [fy0 + (fy1 - fy0) * i / max(1, nr - 1) for i in range(nr)]
-            return xs, ys
+        if not canvas_available:
+            st.warning("그리기 모듈을 불러오는 중입니다. 잠시 후 새로고침 해주세요.")
+        else:
+            pil_img = PILImage.fromarray(cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))
+            cw = 900
+            ch = int(pil_img.height * cw / pil_img.width)
+            pil_small = pil_img.resize((cw, ch))
+            st.caption("사각형 모드에서 답안 블록과 수험번호 블록을 드래그로 그려주세요.")
+            canvas_result = st_canvas(
+                fill_color="rgba(0, 255, 0, 0.15)",
+                stroke_width=2,
+                stroke_color="#00ff00",
+                background_image=pil_small,
+                drawing_mode="rect",
+                key=f"canvas_{period}",
+                height=ch,
+                width=cw,
+            )
+            rects = []
+            if canvas_result.json_data and canvas_result.json_data.get("objects"):
+                for o in canvas_result.json_data["objects"]:
+                    if o.get("type") == "rect":
+                        x0 = o["left"] / cw
+                        y0 = o["top"] / ch
+                        x1 = (o["left"] + o["width"]) / cw
+                        y1 = (o["top"] + o["height"]) / ch
+                        rects.append((x0, y0, x1, y1))
+            st.info(f"그려진 박스: {len(rects)}개")
 
-        keep_zones = []
-        for i, mz in enumerate(st.session_state.mzones):
-            with st.expander(f"{mz['name']} ({mz['kind']})", expanded=True):
-                c1, c2 = st.columns(2)
-                mz["name"] = c1.text_input("이름", mz["name"], key=f"mzn{i}")
-                if mz["kind"] == "answer":
-                    mz["q_start"] = c2.number_input("시작 문항", 1, 200,
-                                                    mz.get("q_start", 1), key=f"mqs{i}")
-                s1, s2, s3, s4 = st.columns(4)
-                mz["x0"] = s1.slider("왼쪽", 0.0, 1.0, mz["x0"], 0.005, key=f"mx0{i}")
-                mz["y0"] = s2.slider("위", 0.0, 1.0, mz["y0"], 0.005, key=f"my0{i}")
-                mz["x1"] = s3.slider("오른쪽", 0.0, 1.0, mz["x1"], 0.005, key=f"mx1{i}")
-                mz["y1"] = s4.slider("아래", 0.0, 1.0, mz["y1"], 0.005, key=f"my1{i}")
-                n1, n2 = st.columns(2)
-                mz["n_cols"] = n1.number_input("열 수", 2, 15, mz["n_cols"], key=f"mnc{i}")
-                mz["n_rows"] = n2.number_input("행 수", 1, 100, mz["n_rows"], key=f"mnr{i}")
-                if st.button("삭제", key=f"mdel{i}"):
-                    st.session_state.mzones.pop(i)
-                    st.rerun()
-                xs, ys = zone_to_grid(mz)
-                opt = {}
-                if mz["kind"] == "answer":
-                    opt = {"q_start": mz.get("q_start", 1)}
-                keep_zones.append(Zone(mz["kind"], mz["name"], xs, ys, **opt))
+            def rect_to_grid(r, n_cols, n_rows):
+                x0, y0, x1, y1 = r
+                mg = 0.06
+                fx0 = x0 + (x1 - x0) * mg
+                fx1 = x1 - (x1 - x0) * mg
+                fy0 = y0 + (y1 - y0) * mg
+                fy1 = y1 - (y1 - y0) * mg
+                xs = [fx0 + (fx1 - fx0) * i / max(1, n_cols - 1) for i in range(n_cols)]
+                ys = [fy0 + (fy1 - fy0) * i / max(1, n_rows - 1) for i in range(n_rows)]
+                return xs, ys
 
-        if keep_zones:
-            ov = draw_overlay(img2, page_size, keep_zones, bubble_d=bubble_d)
-            st.image(cv2.cvtColor(cv2.resize(ov, (900, int(900 * ov.shape[0] / ov.shape[1]))),
-                                  cv2.COLOR_BGR2RGB),
-                     caption="영역 오버레이 — 점이 버블 한가운데 오도록 슬라이더를 조정하세요 (초록=답안, 분홍=수험번호)")
-            if st.button("템플릿 저장"):
-                tpl = Template(period=period, zones=keep_zones, page_size=page_size,
-                               bubble_d=bubble_d)
-                ans_zones = [z for z in keep_zones if z.kind == "answer"]
-                if ans_zones:
-                    z0 = ans_zones[0]
-                    ax = min(z0.xs) - 0.02; ay = min(z0.ys) - 0.06
-                    tpl.anchor = dict(x=max(0, ax), y=max(0, ay), w=0.07, h=0.036)
-                tp = os.path.join(sp, f"template_{period}.json")
-                tpl.save(tp)
-                gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-                tpl.save_anchor(tp, gray)
-                st.success(f"템플릿 저장됨: template_{period}.json")
-                # 다음 교시를 위해 영역 초기화
-                st.session_state.mzones = []
+            keep_zones = []
+            for i, r in enumerate(rects):
+                with st.expander(f"박스 {i+1}", expanded=True):
+                    c1, c2, c3 = st.columns(3)
+                    kind = c1.selectbox("종류", ["answer", "examno"],
+                                        key=f"ckind{i}")
+                    name = c2.text_input("이름",
+                                         f"답안{i+1}" if kind == "answer" else "수험번호",
+                                         key=f"cname{i}")
+                    q_start = 1
+                    if kind == "answer":
+                        q_start = c3.number_input("시작 문항", 1, 200, 1, key=f"cqs{i}")
+                    n1, n2 = st.columns(2)
+                    if kind == "answer":
+                        n_cols = n1.number_input("열 수 (선택지)", 2, 10, 5, key=f"cnc{i}")
+                        n_rows = n2.number_input("행 수 (문항 수)", 1, 100, 20, key=f"cnr{i}")
+                    else:
+                        n_cols = n1.number_input("열 수", 2, 15, 9, key=f"cnc{i}")
+                        n_rows = n2.number_input("행 수", 1, 15, 10, key=f"cnr{i}")
+                    xs, ys = rect_to_grid(r, n_cols, n_rows)
+                    opt = {"q_start": q_start} if kind == "answer" else {}
+                    keep_zones.append(Zone(kind, name, xs, ys, **opt))
+
+            if keep_zones:
+                ov = draw_overlay(img2, page_size, keep_zones, bubble_d=bubble_d)
+                st.image(cv2.cvtColor(cv2.resize(ov, (900, int(900 * ov.shape[0] / ov.shape[1]))),
+                                      cv2.COLOR_BGR2RGB),
+                         caption="영역 오버레이 — 점이 버블 한가운데 오도록 박스를 조정하세요")
+                if st.button("템플릿 저장"):
+                    tpl = Template(period=period, zones=keep_zones, page_size=page_size,
+                                   bubble_d=bubble_d)
+                    ans_zones = [z for z in keep_zones if z.kind == "answer"]
+                    if ans_zones:
+                        z0 = ans_zones[0]
+                        ax = min(z0.xs) - 0.02; ay = min(z0.ys) - 0.06
+                        tpl.anchor = dict(x=max(0, ax), y=max(0, ay), w=0.07, h=0.036)
+                    tp = os.path.join(sp, f"template_{period}.json")
+                    tpl.save(tp)
+                    gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+                    tpl.save_anchor(tp, gray)
+                    st.success(f"템플릿 저장됨: template_{period}.json")
 
 # ---------- step 3: roster ----------
 elif step.startswith("3."):
