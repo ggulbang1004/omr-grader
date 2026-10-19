@@ -194,6 +194,10 @@ A. 2단계에서 템플릿 영역이 정확한지 확인하세요. 스캔이 기
 **Q. 수험번호 마킹 오류가 떴어요.**
 A. 오류리스트에서 확인 후 수기로 정정하세요. 가장 가까운 후보 번호를 제안해줍니다.
 
+**Q. 스캔할 때 뒷면(빈 종이)도 같이 들어갔어요.**
+A. 판독 후 "빈 페이지로 의심" 경고가 뜨면 확인하고 삭제 버튼을 누르세요.
+수험번호도 답안도 하나도 마킹 안 된 장을 자동으로 찾아줍니다.
+
 **Q. 다음 모의고사에도 쓸 수 있나요?**
 A. 1단계에서 새 세션을 만들고, 양식이 바뀌었으면 2단계에서 교시별 템플릿만 다시 만들면 됩니다.
 """)
@@ -373,17 +377,39 @@ elif step.startswith("4."):
         kept = [s for s in old if s["exam_no"] not in new_nos]
         return kept + new
 
+    def is_blank_page(s):
+        """수험번호 전부 미기재 + 답안 전부 빈칸 → 빈 페이지(뒷면) 의심."""
+        no = s.get("exam_no", "")
+        no_blank = (not no) or all(c == "-" for c in no)
+        ans = s.get("answers", {})
+        qs = [q for q in ans if q != "_thresh"]
+        all_blank = bool(qs) and all(ans[q].get("blank") for q in qs)
+        return no_blank and all_blank
+
     def show_check(period, results):
         """판독 결과에 대한 명렬표 대조 표시."""
         if not os.path.exists(roster_x):
             st.warning("명렬표를 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
             return
         try:
+            # 빈 페이지(뒷면 스캔) 분리
+            blanks = [s for s in results if is_blank_page(s)]
+            valid = [s for s in results if not is_blank_page(s)]
+            if blanks:
+                st.warning(f"빈 페이지로 의심되는 장이 {len(blanks)}장 있습니다 "
+                           f"(뒷면 스캔?). 확인 후 삭제하세요.")
+                if st.button(f"빈 페이지 {len(blanks)}장 모두 삭제",
+                             key=f"delblank_{period}"):
+                    save_results(period, valid)
+                    st.success("삭제됨")
+                    st.rerun()
+            if not valid:
+                return
             roster, _cfg = load_roster_full(sp)
-            infos = [dict(exam_no=s["exam_no"], name="?") for s in results]
+            infos = [dict(exam_no=s["exam_no"], name="?") for s in valid]
             verdicts, unsubmitted = RO.check_sheets(infos, roster)
             rows = []
-            for s, v in zip(results, verdicts):
+            for s, v in zip(valid, verdicts):
                 errs = [m for _, m in v["errors"]]
                 errs += s.get("exam_no_errors", [])
                 rows.append({"수험번호": v["exam_no_attrib"] or s["exam_no"],
