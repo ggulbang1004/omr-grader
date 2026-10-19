@@ -310,6 +310,32 @@ elif step.startswith("4."):
     if not os.path.exists(roster_x):
         st.warning("3단계에서 명렬표를 먼저 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
     st.info("교시별로 스캔 PDF를 올리세요. 한 번에 여러 교시 올려도 됩니다.")
+
+    def show_check(period, results):
+        """판독 결과에 대한 명렬표 대조 표시."""
+        import pickle
+        if not os.path.exists(roster_x):
+            st.warning("명렬표를 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
+            return
+        try:
+            roster = RO.load_roster(roster_x)
+            infos = [dict(exam_no=s["exam_no"], name="?") for s in results]
+            verdicts, unsubmitted = RO.check_sheets(infos, roster)
+            rows = []
+            for s, v in zip(results, verdicts):
+                errs = [m for _, m in v["errors"]]
+                errs += s.get("exam_no_errors", [])
+                rows.append({"수험번호": v["exam_no_attrib"] or s["exam_no"],
+                             "판정": v["verdict"],
+                             "오류": "; ".join(errs)})
+            st.subheader(f"{period} 명렬표 대조 결과")
+            st.dataframe(rows)
+            if unsubmitted:
+                st.warning("미제출: " + ", ".join(
+                    f"{r['exam_no']}({r['name']})" for r in unsubmitted))
+        except Exception as e:
+            st.error(f"대조 중 오류: {e}")
+
     for period in periods:
         with st.expander(f"{period} PDF", expanded=False):
             pdfs = st.file_uploader(f"{period} 스캔 PDF", type=["pdf"],
@@ -336,28 +362,15 @@ elif step.startswith("4."):
                 with open(os.path.join(sp, f"read_{period}.pkl"), "wb") as f:
                     pickle.dump(results, f)
                 st.success(f"{period}: {len(results)}장 판독 완료")
-                # 판독 직후 명렬표 대조
-                if os.path.exists(roster_x):
-                    try:
-                        roster = RO.load_roster(roster_x)
-                        infos = [dict(exam_no=s["exam_no"], name="?") for s in results]
-                        verdicts, unsubmitted = RO.check_sheets(infos, roster)
-                        rows = []
-                        for s, v in zip(results, verdicts):
-                            errs = [m for _, m in v["errors"]]
-                            errs += s.get("exam_no_errors", [])
-                            rows.append({"수험번호": v["exam_no_attrib"] or s["exam_no"],
-                                         "판정": v["verdict"],
-                                         "오류": "; ".join(errs)})
-                        st.subheader(f"{period} 명렬표 대조 결과")
-                        st.dataframe(rows)
-                        if unsubmitted:
-                            st.warning("미제출: " + ", ".join(
-                                f"{r['exam_no']}({r['name']})" for r in unsubmitted))
-                    except Exception as e:
-                        st.error(f"대조 중 오류: {e}")
-                else:
-                    st.warning("명렬표를 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
+                show_check(period, results)
+            # 저장된 판독 결과 다시 보기
+            rp = os.path.join(sp, f"read_{period}.pkl")
+            if os.path.exists(rp) and st.button(f"{period} 대조 결과 다시 보기",
+                                                key=f"recheck_{period}"):
+                import pickle
+                with open(rp, "rb") as f:
+                    results = pickle.load(f)
+                show_check(period, results)
 
 # ---------- step 5: key ----------
 elif step.startswith("5."):
