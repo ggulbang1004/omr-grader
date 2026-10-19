@@ -277,37 +277,69 @@ elif step.startswith("2."):
         page_size = (pw, ph)
         st.info(f"기울기 보정: {angle:.2f}도 / 페이지: {pw}x{ph}")
         bubble_d = 26
-        if st.button("자동 영역 찾기"):
-            zones, pts = propose_zones(img2, page_size, bubble_d,
-                                       region=(0, 0, int(pw * 0.7), ph))
-            st.session_state.zones = [z.to_dict() for z in zones]
-            cv2.imwrite(os.path.join(sp, f"ref_{period}.png"), img2)
-            st.success(f"{len(zones)}개 영역 후보 검출")
-        if "zones" in st.session_state:
-            zones = [Zone.from_dict(z) for z in st.session_state.zones]
-            st.subheader("검출된 영역 (종류/이름 수정, 삭제 가능)")
-            keep = []
-            for i, z in enumerate(zones):
-                c1, c2, c3, c4 = st.columns([2, 3, 2, 1])
-                z.kind = c1.selectbox(f"종류{i}", ["answer", "examno", "name"],
-                                      index=["answer", "examno", "name"].index(z.kind),
-                                      key=f"kind{i}")
-                z.name = c2.text_input(f"이름{i}", z.name, key=f"nm{i}")
-                if z.kind == "answer":
-                    z.opt["q_start"] = c3.number_input(f"시작문항{i}", 1, 200,
-                                                       z.opt.get("q_start", 1), key=f"qs{i}")
-                if not c4.checkbox("삭제", key=f"del{i}"):
-                    keep.append(z)
-            st.session_state.zones = [z.to_dict() for z in keep]
-            ov = draw_overlay(img2, page_size, keep, bubble_d=bubble_d)
+        cv2.imwrite(os.path.join(sp, f"ref_{period}.png"), img2)
+
+        # ---------- 수동 영역 정의 ----------
+        st.subheader("영역 정의 (슬라이더로 박스를 버블에 맞추세요)")
+        if "mzones" not in st.session_state:
+            st.session_state.mzones = []
+        bcol1, bcol2 = st.columns(2)
+        if bcol1.button("답안 영역 추가"):
+            n = len([z for z in st.session_state.mzones if z["kind"] == "answer"]) + 1
+            st.session_state.mzones.append(dict(
+                kind="answer", name=f"답안{n}", q_start=1,
+                x0=0.60, y0=0.05, x1=0.80, y1=0.95, n_cols=5, n_rows=20))
+        if bcol2.button("수험번호 영역 추가"):
+            st.session_state.mzones.append(dict(
+                kind="examno", name="수험번호",
+                x0=0.85, y0=0.30, x1=0.98, y1=0.95, n_cols=9, n_rows=10))
+
+        def zone_to_grid(mz):
+            """박스 -> 균등 격자 (xs, ys 분수 좌표)."""
+            mg = 0.06  # 박스 안쪽 여백
+            fx0 = mz["x0"] + (mz["x1"] - mz["x0"]) * mg
+            fx1 = mz["x1"] - (mz["x1"] - mz["x0"]) * mg
+            fy0 = mz["y0"] + (mz["y1"] - mz["y0"]) * mg
+            fy1 = mz["y1"] - (mz["y1"] - mz["y0"]) * mg
+            nc, nr = mz["n_cols"], mz["n_rows"]
+            xs = [fx0 + (fx1 - fx0) * i / max(1, nc - 1) for i in range(nc)]
+            ys = [fy0 + (fy1 - fy0) * i / max(1, nr - 1) for i in range(nr)]
+            return xs, ys
+
+        keep_zones = []
+        for i, mz in enumerate(st.session_state.mzones):
+            with st.expander(f"{mz['name']} ({mz['kind']})", expanded=True):
+                c1, c2 = st.columns(2)
+                mz["name"] = c1.text_input("이름", mz["name"], key=f"mzn{i}")
+                if mz["kind"] == "answer":
+                    mz["q_start"] = c2.number_input("시작 문항", 1, 200,
+                                                    mz.get("q_start", 1), key=f"mqs{i}")
+                s1, s2, s3, s4 = st.columns(4)
+                mz["x0"] = s1.slider("왼쪽", 0.0, 1.0, mz["x0"], 0.005, key=f"mx0{i}")
+                mz["y0"] = s2.slider("위", 0.0, 1.0, mz["y0"], 0.005, key=f"my0{i}")
+                mz["x1"] = s3.slider("오른쪽", 0.0, 1.0, mz["x1"], 0.005, key=f"mx1{i}")
+                mz["y1"] = s4.slider("아래", 0.0, 1.0, mz["y1"], 0.005, key=f"my1{i}")
+                n1, n2 = st.columns(2)
+                mz["n_cols"] = n1.number_input("열 수", 2, 15, mz["n_cols"], key=f"mnc{i}")
+                mz["n_rows"] = n2.number_input("행 수", 1, 100, mz["n_rows"], key=f"mnr{i}")
+                if st.button("삭제", key=f"mdel{i}"):
+                    st.session_state.mzones.pop(i)
+                    st.rerun()
+                xs, ys = zone_to_grid(mz)
+                opt = {}
+                if mz["kind"] == "answer":
+                    opt = {"q_start": mz.get("q_start", 1)}
+                keep_zones.append(Zone(mz["kind"], mz["name"], xs, ys, **opt))
+
+        if keep_zones:
+            ov = draw_overlay(img2, page_size, keep_zones, bubble_d=bubble_d)
             st.image(cv2.cvtColor(cv2.resize(ov, (900, int(900 * ov.shape[0] / ov.shape[1]))),
-                                  cv2.COLOR_BGR2RGB), caption="영역 오버레이 (초록=답안, 분홍=수험번호, 주황=성명)")
-            # 앵커: 답안1 영역의 상단 헤더를 자동 지정
+                                  cv2.COLOR_BGR2RGB),
+                     caption="영역 오버레이 — 점이 버블 한가운데 오도록 슬라이더를 조정하세요 (초록=답안, 분홍=수험번호)")
             if st.button("템플릿 저장"):
-                tpl = Template(period=period, zones=keep, page_size=page_size,
+                tpl = Template(period=period, zones=keep_zones, page_size=page_size,
                                bubble_d=bubble_d)
-                # 앵커: 첫 번째 answer zone의 좌상단 패치
-                ans_zones = [z for z in keep if z.kind == "answer"]
+                ans_zones = [z for z in keep_zones if z.kind == "answer"]
                 if ans_zones:
                     z0 = ans_zones[0]
                     ax = min(z0.xs) - 0.02; ay = min(z0.ys) - 0.06
@@ -317,6 +349,8 @@ elif step.startswith("2."):
                 gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
                 tpl.save_anchor(tp, gray)
                 st.success(f"템플릿 저장됨: template_{period}.json")
+                # 다음 교시를 위해 영역 초기화
+                st.session_state.mzones = []
 
 # ---------- step 3: roster ----------
 elif step.startswith("3."):
