@@ -443,6 +443,8 @@ elif step.startswith("4."):
             for s, v in zip(valid, verdicts):
                 errs = [m for _, m in v["errors"]]
                 errs += s.get("exam_no_errors", [])
+                if s.get("flipped"):
+                    errs.append("뒤집혀 있었음 (자동으로 바로잡음)")
                 rows.append({"수험번호": v["exam_no_attrib"] or s["exam_no"],
                              "판정": v["status"],
                              "오류": "; ".join(errs)})
@@ -518,6 +520,12 @@ elif step.startswith("4."):
                     for img, rect, angle in PL.read_pdf_pages(tp, dpi=200):
                         img = rotate_img(img, resolve_rotation(rot_val, img, tpl))
                         s = PL.read_sheet(img, tpl)
+                        # 뒤집힌(180도) 페이지 자동 감지: 빈 페이지로 보이면 뒤집어서 재시도
+                        if is_blank_page(s):
+                            s2 = PL.read_sheet(rotate_img(img, 180), tpl)
+                            if not is_blank_page(s2):
+                                s = s2
+                                s["flipped"] = True
                         s["src"] = os.path.basename(tp)
                         results.append(s)
                         done += 1
