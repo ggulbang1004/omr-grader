@@ -311,9 +311,27 @@ elif step.startswith("4."):
         st.warning("3단계에서 명렬표를 먼저 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
     st.info("교시별로 스캔 PDF를 올리세요. 한 번에 여러 교시 올려도 됩니다.")
 
+    def load_results(period):
+        import pickle
+        rp = os.path.join(sp, f"read_{period}.pkl")
+        if os.path.exists(rp):
+            with open(rp, "rb") as f:
+                return pickle.load(f)
+        return []
+
+    def save_results(period, results):
+        import pickle
+        with open(os.path.join(sp, f"read_{period}.pkl"), "wb") as f:
+            pickle.dump(results, f)
+
+    def merge_results(old, new):
+        """수정한 답안지만 다시 올렸을 때: 같은 수험번호는 교체, 나머지는 유지."""
+        new_nos = {s["exam_no"] for s in new}
+        kept = [s for s in old if s["exam_no"] not in new_nos]
+        return kept + new
+
     def show_check(period, results):
         """판독 결과에 대한 명렬표 대조 표시."""
-        import pickle
         if not os.path.exists(roster_x):
             st.warning("명렬표를 올리면 판독 직후 오류를 바로 확인할 수 있습니다.")
             return
@@ -333,6 +351,19 @@ elif step.startswith("4."):
             if unsubmitted:
                 st.warning("미제출: " + ", ".join(
                     f"{r['exam_no']}({r['name']})" for r in unsubmitted))
+            # 잘못 읽힌 옛 항목 삭제 (수험번호 자체를 고쳐서 다시 스캔한 경우)
+            err_nos = [r["수험번호"] for r in rows if r["판정"] != "정상"]
+            if err_nos:
+                st.caption("수험번호 마킹을 고쳐서 다시 스캔했다면, 잘못 읽힌 옛 항목을 지우세요.")
+                del_nos = st.multiselect("삭제할 항목 선택", err_nos,
+                                         key=f"del_{period}")
+                if del_nos and st.button("선택 삭제", key=f"delbtn_{period}"):
+                    del_set = {n.rstrip("*") for n in del_nos}
+                    results = [s for s in results
+                               if s["exam_no"].rstrip("*") not in del_set]
+                    save_results(period, results)
+                    st.success(f"{len(del_nos)}건 삭제됨")
+                    st.rerun()
         except Exception as e:
             st.error(f"대조 중 오류: {e}")
 
@@ -359,10 +390,15 @@ elif step.startswith("4."):
                         done += 1
                         prog.progress(done / max(1, total_pages))
                 import pickle
-                with open(os.path.join(sp, f"read_{period}.pkl"), "wb") as f:
-                    pickle.dump(results, f)
-                st.success(f"{period}: {len(results)}장 판독 완료")
-                show_check(period, results)
+                rp = os.path.join(sp, f"read_{period}.pkl")
+                old = load_results(period)
+                merged = merge_results(old, results)
+                save_results(period, merged)
+                added = len(results)
+                st.success(f"{period}: {added}장 판독 완료"
+                           + (f" (기존 {len(old)}장과 병합 → 총 {len(merged)}장)"
+                              if old else ""))
+                show_check(period, merged)
             # 저장된 판독 결과 다시 보기
             rp = os.path.join(sp, f"read_{period}.pkl")
             if os.path.exists(rp) and st.button(f"{period} 대조 결과 다시 보기",
