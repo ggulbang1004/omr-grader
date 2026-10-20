@@ -18,7 +18,7 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SESS_DIR = os.path.join(APP_DIR, "sessions")
 os.makedirs(SESS_DIR, exist_ok=True)
 
-st.set_page_config(page_title="OMR 가채점", layout="wide")
+st.set_page_config(page_title="OMR 가채점", layout="wide")  # v20261020a
 
 
 # ---------- helpers ----------
