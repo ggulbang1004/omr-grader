@@ -257,6 +257,28 @@ elif step.startswith("2."):
         st.stop()
     sp = sess_path(st.session_state.session)
     period = st.text_input("교시명", value="4교시")
+
+    # 프리셋 불러오기
+    preset_dir = os.path.join(APP_DIR, "presets")
+    if os.path.isdir(preset_dir):
+        presets = sorted([f[:-5] for f in os.listdir(preset_dir) if f.endswith(".json")])
+        if presets:
+            st.subheader("프리셋에서 불러오기")
+            pcol1, pcol2 = st.columns([3, 1])
+            sel_preset = pcol1.selectbox("프리셋 선택", presets, key="preset_sel")
+            if pcol2.button("불러오기"):
+                import shutil
+                src = os.path.join(preset_dir, sel_preset + ".json")
+                dst = os.path.join(sp, f"template_{period}.json")
+                shutil.copy(src, dst)
+                # 앵커 파일도 복사
+                for ext in [".anchor.png", ".anchor.npy"]:
+                    s2 = os.path.join(preset_dir, sel_preset + ext)
+                    if os.path.exists(s2):
+                        shutil.copy(s2, os.path.join(sp, f"template_{period}" + ext))
+                st.success(f"프리셋 '{sel_preset}'을 '{period}'로 불러옴")
+                st.rerun()
+
     ref = st.file_uploader("기준 답안지 이미지/PDF 1페이지", type=["png", "jpg", "pdf"])
     if ref:
         if ref.name.lower().endswith(".pdf"):
