@@ -20,6 +20,9 @@ os.makedirs(SESS_DIR, exist_ok=True)
 
 st.set_page_config(page_title="OMR 가채점", layout="wide")  # v20261020a
 
+with st.sidebar:
+    st.caption("build 2026-10-20 12:45")
+
 
 # ---------- helpers ----------
 def sess_path(name):
@@ -325,14 +328,17 @@ elif step.startswith("2."):
                 x0, y0, ww, hh = r
                 pw2, ph2 = page_size
                 if kind == "answer":
-                    # 답안: 오른쪽 30%는 문번 열이므로 제외
-                    fx0 = (x0 + ww * 0.03) / pw2
-                    fx1 = (x0 + ww * 0.70) / pw2
+                    # 답안 블록: 위 헤더행(문번/답란) + 왼쪽 문번 열 제외
+                    fx0 = (x0 + ww * 0.28) / pw2
+                    fx1 = (x0 + ww * 0.93) / pw2
+                    fy0 = (y0 + hh * 0.07) / ph2
+                    fy1 = (y0 + hh * 0.97) / ph2
                 else:
+                    # 수험번호 블록: 위 라벨행 제외, 좌우는 거의 꽉 참
                     fx0 = (x0 + ww * 0.05) / pw2
                     fx1 = (x0 + ww * 0.95) / pw2
-                fy0 = (y0 + hh * 0.03) / ph2
-                fy1 = (y0 + hh * 0.97) / ph2
+                    fy0 = (y0 + hh * 0.09) / ph2
+                    fy1 = (y0 + hh * 0.97) / ph2
                 xs = [fx0 + (fx1 - fx0) * i / max(1, n_cols - 1) for i in range(n_cols)]
                 ys = [fy0 + (fy1 - fy0) * i / max(1, n_rows - 1) for i in range(n_rows)]
                 return xs, ys

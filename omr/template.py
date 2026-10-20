@@ -264,8 +264,164 @@ def draw_overlay(img, page_size, zones, points=None, bubble_d=28):
     return vis
 
 
-def find_block_rects(img):
-    """엣지 기반 블록 테두리 검출. [(x, y, w, h)] 리스트 (픽셀)."""
+def _lattice_score(pts, bubble_d):
+    """검출된 점들이 격자(dx, dy) 위에 얼마나 잘 놓이는지 0~1 점수.
+
+    답안/수험번호 블록처럼 규칙적인 버블 행렬은 0.8 이상,
+    자모 마킹·헤더 텍스트 같은 불규칙 영역은 낮게 나온다.
+    """
+    import numpy as np
+    pts = np.asarray(pts, dtype=np.float64)
+    # 근접 중복 검출점 병합 (NMS 잔여물)
+    dd = bubble_d * 0.45
+    kept = []
+    for p in pts:
+        if all((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 > dd * dd for q in kept):
+            kept.append(p)
+    pts = np.asarray(kept, dtype=np.float64)
+    if len(pts) < 12:
+        return 0.0
+    tol = bubble_d * 0.5
+
+    def spacing(vals):
+        c = D.cluster_1d(list(vals), bubble_d * 0.45)
+        if len(c) < 3:
+            return None
+        c = sorted(c)
+        return float(np.median(np.diff(c)))
+
+    dx = spacing(pts[:, 0])
+    dy = spacing(pts[:, 1])
+    if dx is None or dy is None:
+        return 0.0
+
+    def phase(v, d):
+        f = (v / d) % 1.0
+        ang = f * 2 * np.pi
+        m = np.arctan2(np.median(np.sin(ang)), np.median(np.cos(ang)))
+        return (m / (2 * np.pi)) % 1.0
+
+    px = phase(pts[:, 0], dx)
+    py = phase(pts[:, 1], dy)
+    ex = np.abs(((pts[:, 0] / dx - px + 0.5) % 1.0) - 0.5) * dx
+    ey = np.abs(((pts[:, 1] / dy - py + 0.5) % 1.0) - 0.5) * dy
+    return float(np.mean((ex < tol) & (ey < tol)))
+
+
+def _block_grid_score(img, rect, bubble_d):
+    """후보 블록 안의 버블이 규칙 격자를 이루는지 점수 (0~1)."""
+    x, y, w, h = (int(v) for v in rect)
+    m = int(bubble_d * 0.8)
+    x0, y0, x1, y1 = x + m, y + m, x + w - m, y + h - m
+    if x1 - x0 < bubble_d * 3 or y1 - y0 < bubble_d * 3:
+        return 0.0
+    crop = img[y0:y1, x0:x1]
+    if crop.size == 0:
+        return 0.0
+    pts = D.detect_rings(crop, bubble_d, thresh=0.22)
+    pts = [(px + x0, py + y0) for px, py in pts]
+    return _lattice_score(pts, bubble_d)
+
+
+def _pick_regular(center_counts, n):
+    """(중심, 점 개수) 리스트에서 n개를 선택.
+
+    점 개수와 간격 규칙성을 함께 고려해 가장 그럴듯한 열/행을 고른다.
+    (문번 열·답란 행 같은 비마킹 요소를 제외하기 위함)
+    """
+    import itertools
+    import numpy as np
+    cc = sorted(center_counts, key=lambda t: t[0])
+    m = len(cc)
+    if m <= n:
+        return [c for c, _ in cc]
+    cands = cc
+    if m > 12:  # 조합 폭발 방지: 점 많은 순으로 좁힌다
+        cands = sorted(cc, key=lambda t: -t[1])[:n + 3]
+        cands = sorted(cands, key=lambda t: t[0])
+        m = len(cands)
+    best, best_s = None, -1e18
+    for combo in itertools.combinations(range(m), n):
+        cs = [cands[i][0] for i in combo]
+        tot = sum(cands[i][1] for i in combo)
+        gaps = np.diff(sorted(cs))
+        rel = float(np.std(gaps) / max(np.mean(gaps), 1e-6)) if len(gaps) else 0
+        s = tot * (1 - min(rel, 0.9))
+        if s > best_s:
+            best_s, best = s, cs
+    return sorted(best)
+
+
+def snap_block_grid(img, rect, n_cols, n_rows, bubble_d, kind="answer"):
+    """블록 안에서 실제 버블 중심을 검출해 n_cols x n_rows 격자 좌표를 만든다.
+
+    균등 분할이 아니라 검출된 버블의 실제 위치를 쓰므로,
+    간격이 일정하지 않은 양식에서도 격자점이 버블 한가운데에 온다.
+    문번 열(오른쪽 인쇄 숫자)·답란 행(필기란)은 버블이 없어 자동 제외된다.
+    애매하면 None (균등 분할로 폴백).
+    returns: (xs_abs, ys_abs) 절대좌표 리스트, 검출 실패 시 None.
+    """
+    import numpy as np
+    x, y, w, h = (int(v) for v in rect)
+    m = int(bubble_d * 0.6)
+    rx0, ry0, rx1, ry1 = x + m, y + m, x + w - m, y + h - m
+    if rx1 - rx0 < bubble_d * 2 or ry1 - ry0 < bubble_d * 2:
+        return None
+    pts = D.detect_rings(img, bubble_d, thresh=0.18,
+                         region=(rx0, ry0, rx1, ry1))
+    if len(pts) < n_cols * n_rows * 0.4:
+        return None
+    tol = bubble_d * 0.45
+    cols = D.cluster_1d([p[0] for p in pts], tol)
+    rows = D.cluster_1d([p[1] for p in pts], tol)
+    if len(cols) < n_cols or len(rows) < n_rows:
+        return None
+
+    col_cc = [(c, sum(1 for p in pts if abs(p[0] - c) <= tol)) for c in cols]
+    row_cc = [(r, sum(1 for p in pts if abs(p[1] - r) <= tol)) for r in rows]
+
+    # 답안 블록: 오른쪽 문번(인쇄 숫자) 열 제외 — 가장 큰 간격이 오른쪽에 있으면 잘라낸다
+    if kind == "answer" and len(col_cc) > n_cols:
+        cs = sorted(col_cc, key=lambda t: t[0])
+        gaps = [b[0] - a[0] for a, b in zip(cs, cs[1:])]
+        med = float(np.median(gaps)) if gaps else 0
+        if med > 0 and gaps[-1] >= med * 1.4:
+            cut_x = cs[-1][0]
+            col_cc = [t for t in col_cc if t[0] < cut_x - tol]
+            cols = [c for c in cols if c < cut_x - tol]
+
+    # 애매하면 폴백: 점이 빽빽한 열/행이 요청보다 많으면 (수험번호 블록 등)
+    def n_strong(cc, need):
+        mx = max(c for _, c in cc)
+        return sum(1 for _, c in cc if c >= mx * 0.5)
+    if n_strong(col_cc, n_cols) > n_cols or n_strong(row_cc, n_rows) > n_rows:
+        return None
+
+    cols = _pick_regular(col_cc, n_cols)
+    rows = _pick_regular(row_cc, n_rows)
+    # 선택된 열/행 검증: 점이 너무 적거나 간격이 튀면 폴백
+    col_cnt = [sum(1 for p in pts if abs(p[0] - c) <= tol) for c in cols]
+    row_cnt = [sum(1 for p in pts if abs(p[1] - r) <= tol) for r in rows]
+    if min(col_cnt) < max(2, n_rows * 0.4) or min(row_cnt) < max(2, n_cols * 0.4):
+        return None
+    dxs = np.diff(sorted(cols)); dys = np.diff(sorted(rows))
+    if len(dxs) and dxs.max() > np.median(dxs) * 1.6:
+        return None
+    if len(dys) and dys.max() > np.median(dys) * 1.6:
+        return None
+    xs = [float(np.median([p[0] for p in pts if abs(p[0] - c) <= tol]))
+          for c in cols]
+    ys = [float(np.median([p[1] for p in pts if abs(p[1] - r) <= tol]))
+          for r in rows]
+    return xs, ys
+
+
+def find_block_rects(img, bubble_d=26):
+    """엣지 기반 블록 테두리 검출 + 버블 격자 점수로 필터링.
+
+    [(x, y, w, h)] 리스트 (픽셀). 격자 점수가 낮은 후보
+    (헤더 텍스트·빈 성명란 등)는 제외하고 점수 순으로 정렬.
+    """
     import cv2
     import numpy as np
     h, w = img.shape[:2]
